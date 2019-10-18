@@ -64,7 +64,16 @@ def train_feature():
     train_df['province'] = train_df['province'].map(province_map)
     train_df['model'] = train_df['model'].map(model_map)
     train_df['bodyType'] = train_df['bodyType'].map(bodyType_map)
-
+   
+    # 融合媒体数据
+    single_num = 15840
+    user_search = pd.read_csv('user_search.csv')
+    train_user_search = pd.DataFrame(index = list(range(single_num)))
+    train_user_search['popularity'] = user_search['popularity'].iloc[single_num:single_num*2].values
+    train_user_search['carCommentVolum'] = user_search['carCommentVolum'].iloc[single_num:single_num*2].values
+    train_user_search['newsReplyVolum'] = user_search['newsReplyVolum'].iloc[single_num:single_num*2].values
+    train_df = pd.concat([train_df, train_user_search], axis=1)
+    
     train_df.to_csv('data/train.csv',index=None)
 
     print(train_df)
@@ -103,8 +112,17 @@ def evaluation_feature():
     evaluation_df['province'] = evaluation_df['province'].map(province_map)
     evaluation_df['model'] = evaluation_df['model'].map(model_map)
     evaluation_df['bodyType'] = evaluation_df['bodyType'].map(bodyType_map)
+    
+    # 融合媒体数据
+    single_num = 15840
+    user_search = pd.read_csv('user_search.csv')
+    evaluation_user_search = pd.DataFrame(index = list(range(5280)))
+    evaluation_user_search['popularity'] = user_search['popularity'].iloc[single_num*2:].values
+    evaluation_user_search['carCommentVolum'] = user_search['carCommentVolum'].iloc[single_num*2:].values
+    evaluation_user_search['newsReplyVolum'] = user_search['newsReplyVolum'].iloc[single_num*2:].values
+    evaluation = pd.concat([evaluation_df, evaluation_user_search], axis=1)
 
-    evaluation_df.to_csv('data/evaluation.csv',index=None)
+    evaluation.to_csv('data/evaluation.csv',index=None)
 
     print(evaluation_df)
 
