@@ -66,13 +66,13 @@ def train_feature():
     train_df['bodyType'] = train_df['bodyType'].map(bodyType_map)
    
     # 融合媒体数据
-    single_num = 15840
-    user_search = pd.read_csv('user_search.csv')
-    train_user_search = pd.DataFrame(index = list(range(single_num)))
-    train_user_search['popularity'] = user_search['popularity'].iloc[single_num:single_num*2].values
-    train_user_search['carCommentVolum'] = user_search['carCommentVolum'].iloc[single_num:single_num*2].values
-    train_user_search['newsReplyVolum'] = user_search['newsReplyVolum'].iloc[single_num:single_num*2].values
-    train_df = pd.concat([train_df, train_user_search], axis=1)
+    # single_num = 15840
+    # user_search = pd.read_csv('user_search.csv')
+    # train_user_search = pd.DataFrame(index = list(range(single_num)))
+    # train_user_search['popularity'] = user_search['popularity'].iloc[single_num:single_num*2].values
+    # train_user_search['carCommentVolum'] = user_search['carCommentVolum'].iloc[single_num:single_num*2].values
+    # train_user_search['newsReplyVolum'] = user_search['newsReplyVolum'].iloc[single_num:single_num*2].values
+    # train_df = pd.concat([train_df, train_user_search], axis=1)
     
     train_df.to_csv('data/train.csv',index=None)
 
@@ -114,19 +114,95 @@ def evaluation_feature():
     evaluation_df['bodyType'] = evaluation_df['bodyType'].map(bodyType_map)
     
     # 融合媒体数据
-    single_num = 15840
-    user_search = pd.read_csv('user_search.csv')
-    evaluation_user_search = pd.DataFrame(index = list(range(5280)))
-    evaluation_user_search['popularity'] = user_search['popularity'].iloc[single_num*2:].values
-    evaluation_user_search['carCommentVolum'] = user_search['carCommentVolum'].iloc[single_num*2:].values
-    evaluation_user_search['newsReplyVolum'] = user_search['newsReplyVolum'].iloc[single_num*2:].values
-    evaluation = pd.concat([evaluation_df, evaluation_user_search], axis=1)
+    # single_num = 15840
+    # user_search = pd.read_csv('user_search.csv')
+    # evaluation_user_search = pd.DataFrame(index = list(range(5280)))
+    # evaluation_user_search['popularity'] = user_search['popularity'].iloc[single_num*2:].values
+    # evaluation_user_search['carCommentVolum'] = user_search['carCommentVolum'].iloc[single_num*2:].values
+    # evaluation_user_search['newsReplyVolum'] = user_search['newsReplyVolum'].iloc[single_num*2:].values
+    # evaluation = pd.concat([evaluation_df, evaluation_user_search], axis=1)
 
-    evaluation.to_csv('data/evaluation.csv',index=None)
+    evaluation_df.to_csv('data/evaluation.csv',index=None)
 
     print(evaluation_df)
 
+
+# 销量序列的异常检测和修正
+def correct_train_data():
+    df = pd.read_csv('data/train_sales_data.csv')
+    # 省份 车型 1-12月销量增长情况列表
+    growth_df = pd.DataFrame(index = list(range(22*60)))
+    growth_df['province'] = df.iloc[:22*60,1].values
+    growth_df['model'] = df.iloc[:22*60,2].values
+    growth = df.iloc[22*60*12:,6].values - df.iloc[:22*60*12,6].values
+    growth_arr = np.zeros((22*60,12))
+    for i in range(12):
+        growth_arr[:,i] += growth[22*60*i:22*60*(i+1)]
+
+    # 箱型图求每个省份车型增长异常数据 在哪个月份出现异常
+    growth_list = []
+    Q1 = []
+    Q3 = []
+    for i in range(22*60):
+        growth_list.append(growth_arr[i,:].tolist())
+        Q1.append(np.percentile(growth_arr[i,:], 25))
+        Q3.append(np.percentile(growth_arr[i,:], 75))
+    # 箱型图计算
+    growth_df['growth'] = growth_list
+    IQR = np.array(Q3) - np.array(Q1)
+    lower_quartile = np.array(Q1) - 1.5*IQR
+    upper_quartile = np.array(Q3) + 1.5*IQR
+    # 异常月份 即离群点检测
+    abnormal_month = []
+    for i in range(22*60):
+        abnormal_month.append([index+1 for index,value in enumerate(growth_list[i]) if value<lower_quartile[i] or value>upper_quartile[i]])
+
+    growth_df['lowerQuartile'] = lower_quartile
+    growth_df['upperQuartile'] = upper_quartile
+    growth_df['abnormal'] = abnormal_month
+
+    # 使用箱型图的上界或下界对异常销量值进行修正
+    for province_model in range(22*60):
+        for month in abnormal_month[province_model]:
+            correct = 0
+            if growth_list[province_model][month-1] < lower_quartile[province_model]:
+                correct = lower_quartile[province_model]
+            else:
+                correct = upper_quartile[province_model]
+            # 判断修正16年or17年 修正与周围数据的差距大的那一年
+            data = df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
+                          & (df.regMonth == month)]['salesVolume']
+            data16 = data.iloc[0]
+            data17 = data.iloc[1]
+            if month == 1:
+                compare = df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
+                                 & (df.regMonth == 2)]['salesVolume']
+            else:
+                compare = df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
+                                 & (df.regMonth == month-1)]['salesVolume']
+            compare16 = compare.iloc[0]
+            compare17 = compare.iloc[1]
+            if abs(compare16 - data16) > abs(compare17 - data17):
+                # 修正16年数据
+                print(df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
+                             & (df.regMonth == month)]['salesVolume'].iloc[0])
+                df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
+                       & (df.regMonth == month) & (df.regYear == 2016),'salesVolume'] = math.ceil(data17 - correct)
+                print(df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
+                             & (df.regMonth == month)]['salesVolume'].iloc[0])
+            else:
+                # 修正17年数据
+                df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
+                       & (df.regMonth == month) & (df.regYear == 2017),'salesVolume'] = math.ceil(data16 + correct)
+
+    growth_df.to_csv('data/growth.csv',index=None)
+    df.to_csv('data/correct_train_sales_data.csv',index=None)
+
+
 if __name__ == '__main__':
 
-    # train_feature()
+    train_feature()
     evaluation_feature()
+
+
+
