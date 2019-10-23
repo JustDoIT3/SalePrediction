@@ -3,6 +3,12 @@
 import pandas as pd
 import numpy as np
 import math
+import matplotlib.pyplot as plt
+seed = 7
+np.random.seed(seed)
+
+from keras.models import Sequential,Model,load_model
+from keras.layers import Conv1D,MaxPooling1D,Dense,Flatten
 
 # 省份 车型 有序编码
 def encode_map(df):
@@ -32,7 +38,7 @@ def train_feature():
 
     start_label = 22*60*12
 
-    df = pd.read_csv('data/train_sales_data.csv')
+    df = pd.read_csv('data/correct_train_sales_data.csv')
     df_search = pd.read_csv('data/train_search_data.csv')
     df_merge = pd.merge(df,df_search)
 
@@ -74,9 +80,50 @@ def train_feature():
     # train_user_search['newsReplyVolum'] = user_search['newsReplyVolum'].iloc[single_num:single_num*2].values
     # train_df = pd.concat([train_df, train_user_search], axis=1)
     
-    train_df.to_csv('data/train.csv',index=None)
+    train_df.to_csv('data/train1021.csv',index=None)
 
     print(train_df)
+
+# CNN自动提取特征
+def CNN_feature():
+
+    # 模型搭建 前12个月销量作为输入
+    model = Sequential()
+    model.add(Conv1D(50,5,activation='relu',input_shape=(12,1)))
+    model.add(MaxPooling1D(2))
+    model.add(Conv1D(100,3,activation='relu'))
+    model.add(MaxPooling1D(2))
+    model.add(Flatten())
+    model.add(Dense(1))
+
+    # 数据集准备 模型训练
+    train_df = pd.read_csv('data/train.csv')
+    train_x = train_df.iloc[:,6:18].values
+    train_y = train_df.iloc[:,0].values
+    train_x = train_x.reshape((15840,12,1))
+    # 数据集shuffle
+    index=np.arange(15840)
+    np.random.shuffle(index)
+    train_shuffle_x = train_x[index,:,:]
+    train_shuffle_y = train_y[index]
+
+    model.compile(optimizer='adam',loss='mean_squared_error',metrics=['mean_squared_error'])
+    history = model.fit(train_shuffle_x,train_shuffle_y,epochs=1000,batch_size=15840,validation_split=0.2,shuffle=False)
+
+    # 取出中间层特征输出模型存储
+    feature_model = Model(inputs=model.input,outputs=model.get_layer('flatten_1').output)
+    feature_model.save('data/feature_model.h5')
+    cnn_feature = feature_model.predict(train_x)
+    for i in range(100):
+        train_df['cnnfeature'+str(i+1)] = cnn_feature[:,i]
+
+    train_df.to_csv('data/train_cnn.csv',index=None)
+
+
+    # rmse = history.history['val_mean_squared_error']
+    # plt.plot(range(1500),rmse)
+    # plt.show()
+    # print(rmse.index(min(rmse)))
 
 def evaluation_feature():
     sale_df = pd.read_csv('data/train_sales_data.csv')
@@ -102,6 +149,15 @@ def evaluation_feature():
     evaluation_df['firstOrderTrend1'] = evaluation_df['sales1MonthAgo'] - evaluation_df['sales2MonthAgo']
     evaluation_df['firstOrderTrend2'] = evaluation_df['sales2MonthAgo'] - evaluation_df['sales3MonthAgo']
     evaluation_df['secondOrderTrend'] = evaluation_df['firstOrderTrend1'] - evaluation_df['firstOrderTrend2']
+    # cnn特征
+    model = load_model('data/feature_model.h5')
+    cnn_feature = np.zeros((22*60*4,100))
+    x = evaluation_df.iloc[:22*60,5:17].values
+    x = x.reshape((1320,12,1))
+    predict = model.predict(x)
+    cnn_feature[:22*60,:] = predict
+    for i in range(100):
+        evaluation_df['cnnfeature'+str(i+1)] = cnn_feature[:,i]
 
     # 省份 车型 one-hot编码
     # province_onehot = pd.get_dummies(df['adcode'])
@@ -122,7 +178,7 @@ def evaluation_feature():
     # evaluation_user_search['newsReplyVolum'] = user_search['newsReplyVolum'].iloc[single_num*2:].values
     # evaluation = pd.concat([evaluation_df, evaluation_user_search], axis=1)
 
-    evaluation_df.to_csv('data/evaluation.csv',index=None)
+    evaluation_df.to_csv('data/evaluation_cnn.csv',index=None)
 
     print(evaluation_df)
 
@@ -161,10 +217,20 @@ def correct_train_data():
     growth_df['upperQuartile'] = upper_quartile
     growth_df['abnormal'] = abnormal_month
 
+    map = {}
+    for i in range(12):
+        map[i+1] = 0
+    for month_list in abnormal_month:
+        for month in month_list:
+            map[month] += 1
+    print(map)
+
+
     # 使用箱型图的上界或下界对异常销量值进行修正
+    count16 = 0
+    count17 = 0
     for province_model in range(22*60):
         for month in abnormal_month[province_model]:
-            correct = 0
             if growth_list[province_model][month-1] < lower_quartile[province_model]:
                 correct = lower_quartile[province_model]
             else:
@@ -178,31 +244,36 @@ def correct_train_data():
                 compare = df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
                                  & (df.regMonth == 2)]['salesVolume']
             else:
+            # if month != 1 and month != 12:
                 compare = df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
                                  & (df.regMonth == month-1)]['salesVolume']
             compare16 = compare.iloc[0]
             compare17 = compare.iloc[1]
+
             if abs(compare16 - data16) > abs(compare17 - data17):
                 # 修正16年数据
-                print(df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
-                             & (df.regMonth == month)]['salesVolume'].iloc[0])
                 df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
                        & (df.regMonth == month) & (df.regYear == 2016),'salesVolume'] = math.ceil(data17 - correct)
-                print(df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
-                             & (df.regMonth == month)]['salesVolume'].iloc[0])
+                count16 += 1
             else:
                 # 修正17年数据
                 df.loc[(df.adcode == growth_df.iloc[province_model,0]) & (df.model == growth_df.iloc[province_model,1])
                        & (df.regMonth == month) & (df.regYear == 2017),'salesVolume'] = math.ceil(data16 + correct)
+                count17 += 1
 
+    print(count16)
+    print(count17)
     growth_df.to_csv('data/growth.csv',index=None)
     df.to_csv('data/correct_train_sales_data.csv',index=None)
 
 
 if __name__ == '__main__':
 
-    train_feature()
+
+    # correct_train_data()
+    # train_feature()
     evaluation_feature()
+    # CNN_feature()
 
 
 
